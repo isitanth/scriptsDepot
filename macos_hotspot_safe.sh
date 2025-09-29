@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # macos_hotspot_safe.sh
+# 2025/09/26 Anthony Chambet
 # Usage: sudo ./macos_hotspot_safe.sh start|stop|status
 #
 # - Detects Wi-Fi interface and uplink automatically on macOS
@@ -9,7 +10,7 @@
 # IMPORTANT:
 # - You MUST allow Terminal (or your shell app) in System Preferences -> Security & Privacy -> Privacy -> Accessibility
 # - AppleScript GUI elements differ across macOS versions; if AppleScript fails, follow the manual steps printed by the script.
-#
+
 set -eu
 
 ACTION="${1:-status}"
