@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # md_heading_sentence_case.sh
+# 2025/09/26 Anthony Chambet
 # make markdown headings sentence-style:
 # keep casing of the first meaningful word; lowercase the rest,
 # while preserving acronyms and numbering. skips code fences.
