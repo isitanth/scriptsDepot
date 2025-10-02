@@ -35,7 +35,7 @@ All scripts are MIT licensed and designed to be simple, auditable, and easily ad
 
 ---
 
-## ⚡ Usage examples
+## Usage examples
 
 ### Mach-O inspection
 ```bash
