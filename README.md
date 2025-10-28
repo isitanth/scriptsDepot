@@ -30,7 +30,7 @@ All scripts are MIT licensed and designed to be simple, auditable, and easily ad
 - **macos_hotspot_safe.sh**  
   Utility script to configure safe Wi-Fi hotspot setup on macOS.
 
-- **md_heading_sentence_case.sh**  
+- **md_heading_sentence_case.sh (recently updated)**  
   Markdown helper: normalize headings to sentence case.
 
 ---
