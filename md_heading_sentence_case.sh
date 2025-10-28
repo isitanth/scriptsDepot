@@ -1,123 +1,129 @@
 #!/usr/bin/env bash
+
+
 # md_heading_sentence_case.sh
 # 2025/09/26 Anthony Chambet
+# 2025/10/28 Updated hyphen and slash combos and better regex parsing
 # make markdown headings sentence-style:
 # keep casing of the first meaningful word; lowercase the rest,
 # while preserving acronyms and numbering. skips code fences.
 
 set -euo pipefail
 
-usage() {
-  cat <<EOF
-usage: $0 [-i] [FILE...]
-  without -i: reads files (or stdin) and writes to stdout
-  with    -i: edits files in place (creates .bak backups)
-examples:
-  $0 README.md
-  $0 -i README.md docs/*.md
-  cat README.md | $0
-EOF
+# Usage:
+#   ./md_heading_sentence_case.sh input.md > output.md
+#   cat input.md | ./md_heading_sentence_case.sh > output.md
+#
+# Behavior:
+#   - Removes emojis and common pictographs from all text
+#   - Normalizes Markdown heading whitespace
+#   - Converts Markdown headings (#..######) to sentence case
+#   - Converts list items whose first content is a bold span to sentence case
+#     while preserving acronyms (2+ uppercase letters) like GPU, API, FFT, EU, EUI
+#   - Skips fenced code blocks (```)
+#   - Leaves other lines unchanged (aside from emoji stripping)
+#
+# Controls:
+#   - Set PRESERVE_ALL_CAPS=1 to preserve any ALLCAPS tokens (2+ caps) fully.
+#
+# Exit codes:
+#   0 on success, non-zero on usage or IO errors.
+
+process_markdown() {
+  perl -CSD -pe '
+    use strict;
+    use warnings;
+    our $in_code = 0;
+
+    # Toggle code fence state; leave line unchanged
+    if (/^\s*```/) { $in_code = !$in_code; }
+
+    # Helper sub: sentence-case with acronym preservation
+    sub sentence_case_preserve_acronyms {
+      my ($s) = @_;
+
+      # Remove emojis inside target
+      $s =~ s/[\x{200D}\x{FE0F}]//g;
+      $s =~ s/[\x{1F1E6}-\x{1F1FF}]//g;
+      $s =~ s/[\x{1F3FB}-\x{1F3FF}]//g;
+      $s =~ s/[\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F300}-\x{1FAFF}]//g;
+
+      # Trim and collapse spaces
+      $s =~ s/^\s+|\s+$//g;
+      $s =~ s/\s{2,}/ /g;
+
+      my $preserve_all = $ENV{PRESERVE_ALL_CAPS} // q{};
+
+      # Tokenize into alnum vs non-alnum, preserve punctuation current workaround but may not work for all contexts
+      my @toks = ($s =~ /([A-Za-z0-9]+|[^A-Za-z0-9]+)/g);
+      for (my $i = 0; $i <= $#toks; $i++) {
+        my $t = $toks[$i];
+        if ($t =~ /^[A-Za-z0-9]+$/) {
+          my $uc = () = ($t =~ /[A-Z]/g);
+          if ($uc >= 2) {
+            unless ($preserve_all) {
+              # Basically I decided to check each tokens with ALLCAPS and longer than 5 should like not be an acronym (to be investigated for a better logic)
+              if ($t =~ /^[A-Z]{6,}$/) {
+                $t = lc($t);
+              }
+            }
+          } else {
+            $t = lc($t);
+          }
+          $toks[$i] = $t;
+        }
+      }
+
+      # Reassemble
+      $s = join("", @toks);
+
+      # Capitalize first letter (Unicode-ish)
+      $s =~ s/^([A-Za-z])/uc($1)/e;
+
+      return $s;
+    }
+
+    if (!$in_code) {
+      # 1) Headings
+      if (/^(\#{1,6})[ \t]*(.*)$/) {
+        my ($h, $text) = ($1, $2);
+        my $sc = sentence_case_preserve_acronyms($text);
+        $_ = "$h $sc\n";
+        next;
+      }
+
+      # 2) List items where the FIRST content is a bold span
+      if (/^(\s*(?:\d+[\.\)]|[-+*]))\s+(\*\*)([^*]+)(\*\*)(.*)$/) {
+        my ($lead, $o, $inner, $c, $rest) = ($1, $2, $3, $4, $5);
+        my $sc = sentence_case_preserve_acronyms($inner);
+        $_ = "$lead $o$sc$c$rest\n";
+        next;
+      }
+    }
+
+    # 3) Global emoji stripping for any remaining content (outside code)
+    s/[\x{200D}\x{FE0F}]//g;
+    s/[\x{1F1E6}-\x{1F1FF}]//g;
+    s/[\x{1F3FB}-\x{1F3FF}]//g;
+    s/[\x{2600}-\x{26FF}\x{2700}-\x{27BF}\x{1F300}-\x{1FAFF}]//g;
+  ' "$@"
 }
 
-inplace=0
-if [[ "${1:-}" == "-i" ]]; then
-  inplace=1
-  shift
-fi
-
-process() {
-  awk '
-  function is_code_fence(line) { return line ~ /^(```|~~~)/ }
-  function is_heading(line)    { return line ~ /^[[:space:]]*#{1,6}[[:space:]]+/ }
-
-  # token helpers (POSIX awk compatible)
-  function strip_trailing_punct(t,    u) {
-	# remove trailing punctuation commonly found in titles, keep / and - in place
-	u = t
-	sub(/[[:punct:]]+$/, "", u)
-	return u
-  }
-  function is_number_token(t) {
-	# matches: 4, 4., 4), IV, IV), 2025.
-	return t ~ /^([0-9]+|[IVXLCDM]+)([.)])?$/
-  }
-  function is_acronym(t,    core) {
-	# allow separators - or / inside, but no lowercase letters
-	core = t
-	# drop trailing punctuation for the test
-	sub(/[[:punct:]]+$/, "", core)
-	# at least one upper/digit; allow grouped segments joined by - or /
-	# BSD awk-safe: put - at start to avoid range
-	return core ~ /^[[:upper:][:digit:]]+([-\/][[:upper:][:digit:]]+)*$/ && core !~ /[[:lower:]]/
-  }
-
-  BEGIN { in_code=0 }
-  {
-	line = $0
-
-	if (is_code_fence(line)) { in_code = !in_code; print line; next }
-	if (in_code) { print line; next }
-
-	if (!is_heading(line)) { print line; next }
-
-	# split prefix (hashes + spaces) and text
-	match(line, /^[[:space:]]*(#{1,6}[[:space:]]+)/)
-	prefix = substr(line, 1, RLENGTH)
-	text   = substr(line, RLENGTH+1)
-
-	# split on spaces; keep simple spacing
-	n = split(text, tok, /[ ]+/)
-	out = ""
-	first_kept = 0
-
-	for (i = 1; i <= n; i++) {
-	  t = tok[i]
-	  if (t == "") { continue }
-
-	  if (!first_kept) {
-		if (is_number_token(t)) {
-		  out = (out ? out " " : "") t
-		  continue
-		} else {
-		  # first meaningful token: keep as-is
-		  out = (out ? out " " : "") t
-		  first_kept = 1
-		  continue
-		}
-	  } else {
-		# after the first word: keep acronyms as-is, lowercase everything else
-		if (is_acronym(t)) {
-		  out = out " " t
-		} else {
-		  # preserve any trailing punctuation by lowercasing core then reattaching
-		  core = t
-		  trail = ""
-		  if (core ~ /[[:punct:]]+$/) {
-			# capture trailing punctuation
-			match(core, /[[:punct:]]+$/)
-			trail = substr(core, RSTART, RLENGTH)
-			core = substr(core, 1, RSTART-1)
-		  }
-		  out = out " " tolower(core) trail
-		}
-	  }
-	}
-
-	print prefix out
-  }'
-}
-
-if (( inplace == 1 )); then
-  if (( $# == 0 )); then usage >&2; exit 1; fi
-  for f in "$@"; do
-	[[ -f "$f" ]] || { echo "not a file: $f" >&2; continue; }
-	cp -f -- "$f" "$f.bak"
-	process <"$f.bak" >"$f"
-  done
-else
-  if (( $# == 0 )); then
-	process
-  else
-	for f in "$@"; do process <"$f"; done
+main() {
+  if [[ $# -gt 1 ]]; then
+    echo "Usage: $0 [file.md]" >&2
+    exit 2
   fi
-fi
+
+  if [[ $# -eq 1 ]]; then
+    if [[ ! -f "$1" ]]; then
+      echo "Error: file not found: $1" >&2
+      exit 3
+    fi
+    process_markdown "$1"
+  else
+    process_markdown
+  fi
+}
+
+main "$@"
